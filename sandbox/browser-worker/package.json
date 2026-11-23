@@ -1,0 +1,8 @@
+{
+  "name": "@nexus/browser-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Runs inside the isolated browser container. Mounted read-only by the sandbox manager.",
+  "dependencies": { "playwright-core": "1.49.1" }
+}
