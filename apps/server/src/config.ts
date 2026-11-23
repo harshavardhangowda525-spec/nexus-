@@ -28,7 +28,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
       pids: num(env.SANDBOX_PIDS, 256),
       execTimeoutMs: num(env.SANDBOX_EXEC_TIMEOUT_MS, 120_000),
       maxOutputBytes: num(env.SANDBOX_MAX_OUTPUT_BYTES, 64_000),
-      uid: env.SANDBOX_UID || '1000:1000',
+      uid: env.SANDBOX_UID || (process.getuid && process.getuid() > 0 ? `${process.getuid()}:${process.getgid!()}` : '1000:1000'),
       browserNetwork: env.SANDBOX_BROWSER_NETWORK || 'nexus-browser',
       browserWorkerDir: path.resolve(env.SANDBOX_BROWSER_WORKER_DIR || path.join(process.cwd(), '../../sandbox/browser-worker')),
       browserTimeoutMs: num(env.SANDBOX_BROWSER_TIMEOUT_MS, 45_000),

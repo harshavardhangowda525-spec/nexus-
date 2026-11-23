@@ -46,6 +46,7 @@ export function checkHost(host: string, port: number, policy: EgressPolicy): { o
 export class EgressGateway {
   private grants = new Map<string, EgressGrant>();
   private server: http.Server | null = null;
+  private sockets = new Set<net.Socket>();
   private upstream: URL | null;
   port = 0;
   host = '';
@@ -166,6 +167,10 @@ export class EgressGateway {
         deny(502, `connect failed: ${(e as Error).message}`);
       }
     });
+    this.server.on('connection', (s) => {
+      this.sockets.add(s);
+      s.once('close', () => this.sockets.delete(s));
+    });
     await new Promise<void>((resolve, reject) => {
       this.server!.once('error', reject);
       this.server!.listen(port, host, () => resolve());
@@ -176,6 +181,13 @@ export class EgressGateway {
   }
 
   async stop() {
-    await new Promise<void>((r) => (this.server ? this.server.close(() => r()) : r()));
+    if (!this.server) return;
+    const srv = this.server;
+    for (const s of this.sockets) s.destroy();
+    this.sockets.clear();
+    await new Promise<void>((r) => {
+      srv.close(() => r());
+      srv.closeAllConnections();
+    });
   }
 }

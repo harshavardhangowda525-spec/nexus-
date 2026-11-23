@@ -46,7 +46,7 @@ export class ProjectFiles {
     if (abs === this.root) throw new PathError('cannot write to the project root');
     const dir = path.dirname(abs);
     fs.mkdirSync(dir, { recursive: true });
-    this.resolve(this.rel(dir)); // re-check after mkdir
+    if (dir !== this.root) this.resolve(this.rel(dir)); // re-check after mkdir
     try {
       if (fs.lstatSync(abs).isSymbolicLink()) throw new PathError('refusing to write through a symlink');
     } catch (e) {

@@ -40,10 +40,13 @@ describe('passwords', () => {
 describe('ProjectFiles path confinement', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nexus-ws-'));
   const files = new ProjectFiles(path.join(dir, 'proj'));
-  it('writes and reads inside the project', () => {
+  it('writes and reads inside the project (root and subdirectories)', () => {
+    files.write('report.md', '# Report');
+    expect(files.read('report.md').content.toString()).toBe('# Report');
     files.write('site/index.html', '<h1>hi</h1>');
     expect(files.read('site/index.html').content.toString()).toBe('<h1>hi</h1>');
     expect(files.list().map((f) => f.path)).toContain('site/index.html');
+    expect(files.list().map((f) => f.path)).toContain('report.md');
   });
   it.each(['../escape.txt', '/etc/passwd', 'a/../../b', 'C:\\x', 'nul\0byte'])('rejects %s', (p) => {
     expect(() => files.write(p, 'x')).toThrow(PathError);

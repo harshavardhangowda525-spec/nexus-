@@ -147,6 +147,7 @@ export async function planMission(rt: Runtime, missionId: string, signal?: Abort
  */
 export async function schedule(rt: Runtime, missionId: string) {
   const toEnqueue: string[] = [];
+  const queuedEvents: { agentId: AgentId; taskId: string; key: string }[] = [];
   let completedReport: string | null = null;
   let ws = '';
   await tx(rt.db, async (c) => {
@@ -168,9 +169,12 @@ export async function schedule(rt: Runtime, missionId: string) {
       busy.add(t.agent_id);
       await c.query("update tasks set status = 'queued' where id = $1", [t.id]);
       toEnqueue.push(t.id);
-      await rt.bus.emit({ workspaceId: ws, missionId, agentId: t.agent_id, taskId: t.id, type: 'task.status', payload: { key: t.key, status: 'queued' } });
+      queuedEvents.push({ agentId: t.agent_id as AgentId, taskId: t.id, key: t.key });
     }
   });
+  for (const e of queuedEvents) {
+    await rt.bus.emit({ workspaceId: ws, missionId, agentId: e.agentId, taskId: e.taskId, type: 'task.status', payload: { key: e.key, status: 'queued' } });
+  }
   for (const id of toEnqueue) await rt.queue.enqueueTask(id);
   if (completedReport !== null) await completeMission(rt, ws, missionId);
 }
