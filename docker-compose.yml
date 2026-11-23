@@ -1,0 +1,106 @@
+# NEXUS Docker Compose stack
+#
+# Database: By default, NEXUS connects to Neon Postgres via DATABASE_URL in .env.
+# For offline local development, start the optional local Postgres service with:
+#   docker compose --profile local-db up -d
+#
+# SECURITY WARNING:
+# Mounting /var/run/docker.sock into the server and worker containers is PRIVILEGED.
+# Access to the Docker socket is effectively equivalent to root access on the host.
+# Only run this stack on a dedicated host/VM, and use host-matching paths for
+# NEXUS_DATA_DIR and SANDBOX_BROWSER_WORKER_DIR so sibling sandbox containers mount
+# the right host directories.
+
+services:
+  redis:
+    image: mirror.gcr.io/library/redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Optional local Postgres for offline development (`docker compose --profile local-db up`).
+  postgres:
+    image: mirror.gcr.io/library/postgres:16-alpine
+    profiles: ["local-db"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: nexus
+      POSTGRES_PASSWORD: nexus
+      POSTGRES_DB: nexus
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - nexus_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nexus -d nexus"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  server:
+    image: mirror.gcr.io/library/node:22-bookworm-slim
+    working_dir: /workspace
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "4000"
+      REDIS_URL: "${REDIS_URL:-redis://redis:6379}"
+      NEXUS_RUN_WORKER: "false"
+      NEXUS_DATA_DIR: "${NEXUS_DATA_DIR:-/workspace/data}"
+      SANDBOX_BROWSER_WORKER_DIR: "${SANDBOX_BROWSER_WORKER_DIR:-/workspace/sandbox/browser-worker}"
+    ports:
+      - "127.0.0.1:4000:4000"
+    volumes:
+      - .:/workspace
+      # PRIVILEGED: required so the server can inspect Docker health and clean up sandboxes.
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: ["npm", "run", "start", "-w", "@nexus/server"]
+
+  worker:
+    image: mirror.gcr.io/library/node:22-bookworm-slim
+    working_dir: /workspace
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      REDIS_URL: "${REDIS_URL:-redis://redis:6379}"
+      NEXUS_DATA_DIR: "${NEXUS_DATA_DIR:-/workspace/data}"
+      SANDBOX_BROWSER_WORKER_DIR: "${SANDBOX_BROWSER_WORKER_DIR:-/workspace/sandbox/browser-worker}"
+    volumes:
+      - .:/workspace
+      # PRIVILEGED: required so the worker can launch isolated exec and browser sandbox containers.
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: ["npm", "run", "worker", "-w", "@nexus/server"]
+
+  web:
+    image: mirror.gcr.io/library/node:22-bookworm-slim
+    working_dir: /workspace
+    restart: unless-stopped
+    depends_on:
+      - server
+    environment:
+      PORT: "3000"
+      HOSTNAME: "0.0.0.0"
+      API_URL: "http://server:4000"
+      NEXT_PUBLIC_WS_ORIGIN: "${NEXT_PUBLIC_WS_ORIGIN:-ws://localhost:4000}"
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - .:/workspace
+    command: ["npm", "run", "start", "-w", "@nexus/web"]
+
+volumes:
+  nexus_pgdata:
