@@ -109,3 +109,51 @@ describe('untrusted content wrapper', () => {
     expect(w.match(/<\/untrusted_content>/g)).toHaveLength(1);
   });
 });
+
+describe('SupabaseAuthClient', () => {
+  it('signs up and signs in against GoTrue endpoints', async () => {
+    const http = await import('node:http');
+    const { SupabaseAuthClient } = await import('../../src/auth/supabase.js');
+    const seen: { url: string; apikey: string | undefined; body: any }[] = [];
+    const srv = http.createServer((req, res) => {
+      let raw = '';
+      req.on('data', (d) => (raw += d));
+      req.on('end', () => {
+        const body = raw ? JSON.parse(raw) : {};
+        seen.push({ url: req.url!, apikey: req.headers.apikey as string | undefined, body });
+        res.setHeader('content-type', 'application/json');
+        if (req.url === '/auth/v1/admin/users') {
+          res.end(JSON.stringify({ id: 'sb-uid-1', email: body.email }));
+        } else if (req.url === '/auth/v1/token?grant_type=password') {
+          if (body.password === 'good-password-123') {
+            res.end(JSON.stringify({ user: { id: 'sb-uid-1', email: body.email, user_metadata: { name: 'CEO' } } }));
+          } else {
+            res.writeHead(400).end(JSON.stringify({ error_description: 'Invalid login credentials' }));
+          }
+        } else {
+          res.writeHead(404).end();
+        }
+      });
+    });
+    await new Promise<void>((r) => srv.listen(0, '127.0.0.1', () => r()));
+    const port = (srv.address() as any).port;
+    try {
+      const client = new SupabaseAuthClient({
+        url: `http://127.0.0.1:${port}`,
+        anonKey: 'sb-anon-test',
+        serviceRoleKey: 'sb-service-test',
+      });
+      const created = await client.signUp('ceo@example.com', 'good-password-123', 'CEO');
+      expect(created.id).toBe('sb-uid-1');
+      expect(seen[0].apikey).toBe('sb-service-test');
+
+      const signedIn = await client.signIn('ceo@example.com', 'good-password-123');
+      expect(signedIn.id).toBe('sb-uid-1');
+      expect(seen[1].apikey).toBe('sb-anon-test');
+
+      await expect(client.signIn('ceo@example.com', 'wrong')).rejects.toThrow(/Invalid login credentials/);
+    } finally {
+      await new Promise<void>((r) => srv.close(() => r()));
+    }
+  });
+});

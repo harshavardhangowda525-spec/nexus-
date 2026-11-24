@@ -39,9 +39,9 @@ NEXUS is a TypeScript monorepo with three workspaces plus an isolated browser wo
 - **Prompt-Injection Defense**: Content read from web pages, search results, and project files is wrapped in `<untrusted_content>` delimiters (with inner closing tags stripped) and explicit data-not-instructions framing.
 - **Audit Trail & RBAC**: Workspace roles (`owner`, `admin`, `operator`, `viewer`), scrypt password hashing, `HttpOnly` `SameSite=Lax` session cookies, CSRF origin/JSON checks, and an append-only `audit_log` table.
 
-## Setup on Neon Postgres
+## Setup on Supabase (Database + Auth)
 
-1. **Prerequisites**: Node.js >= 22, Docker daemon running, and Redis (local Docker Redis or Upstash TCP/TLS URL).
+1. **Prerequisites**: Node.js >= 22, Docker daemon running (for local sandboxes / SCOUT browser; or E2B for cloud exec sandboxes), and Redis (local Docker Redis or Upstash TCP/TLS URL).
 2. **Install dependencies**:
    ```bash
    npm install
@@ -53,17 +53,19 @@ NEXUS is a TypeScript monorepo with three workspaces plus an isolated browser wo
    cp .env.example .env
    openssl rand -base64 32   # paste into NEXUS_MASTER_KEY
    ```
-   - Set `DATABASE_URL` to your **Neon Postgres** connection string (must include `sslmode=require`).
-   - `gen_random_uuid()` is built into Postgres 13+, so no extensions are required on Neon.
-4. **Run migrations** (use Neon's **direct, non-pooler** connection URL for migrations; the pooled URL is fine for running the app):
+   - Set `DATABASE_URL` to your **Supabase Postgres** connection string (must include `sslmode=require`).
+   - Optionally set `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` to authenticate users via **Supabase Auth** (GoTrue) while maintaining NEXUS workspace memberships and `HttpOnly` sessions.
+   - Optionally set `SANDBOX_PROVIDER=e2b` and `E2B_API_KEY` to run FORGE's execution sandboxes on **E2B** cloud sandboxes instead of local Docker.
+   - `gen_random_uuid()` is built into Postgres 13+, so no extra extensions are required.
+4. **Run migrations** (use Supabase's **direct** Postgres URL on port `5432` for migrations; the Supavisor pooled URL on port `6543` is fine for running the app):
    ```bash
-   DATABASE_URL="postgres://...@ep-xxx.aws.neon.tech/neondb?sslmode=require" npm run migrate
+   DATABASE_URL="postgres://postgres:[PASSWORD]@db.[PROJECT-REF].supabase.co:5432/postgres?sslmode=require" npm run migrate
    ```
 5. **Start Redis** (if running locally via Docker Compose):
    ```bash
    docker compose up -d redis
    ```
-   For offline local development without Neon, you can also start a local Postgres container:
+   For offline local development without Supabase, you can also start a local Postgres container:
    ```bash
    docker compose --profile local-db up -d redis postgres
    ```
@@ -80,7 +82,9 @@ NEXUS is a TypeScript monorepo with three workspaces plus an isolated browser wo
 In the NEXUS UI, open **Workforce** → **Provider credentials** to add keys (encrypted at rest) and test them before assigning to agents:
 
 - **Anthropic**: Select *Anthropic*, enter your `sk-ant-...` API key. Default model: `claude-opus-5-5` (supports `effort`: `low` / `medium` / `high` / `xhigh` / `max`).
-- **OpenAI-compatible**: Select *OpenAI-compatible*, enter your API key and optional custom Base URL (defaults to `https://api.openai.com/v1`). Default model: `gpt-5`.
+- **OpenAI-compatible / Groq**: Select *OpenAI-compatible*, enter your API key and Base URL:
+  - OpenAI: default `https://api.openai.com/v1`, model `gpt-5`
+  - **Groq**: Base URL `https://api.groq.com/openai/v1`, model `llama-3.3-70b-versatile`
 - **Google Gemini**: Select *Google Gemini*, enter your Gemini API key. Default model: `gemini-2.5-pro`.
 - **Ollama (local)**: Select *Ollama (local)*, no API key required; set Base URL (default `http://127.0.0.1:11434/v1`). Default model: `llama3.1`.
 

@@ -1,12 +1,13 @@
 import path from 'node:path';
 import type { AgentId, AgentVisualState } from '@nexus/shared';
 import type { Redis } from 'ioredis';
+import type { SupabaseAuthClient } from './auth/supabase.js';
 import type { Config } from './config.js';
 import type { Db } from './db/pool.js';
 import type { EventBus } from './events/bus.js';
 import type { ModelGateway } from './models/gateway.js';
 import type { BrowserSandboxes } from './sandbox/browser.js';
-import type { ExecSandboxes } from './sandbox/docker.js';
+import type { ExecBackend } from './sandbox/e2b.js';
 import { ProjectFiles, parseUid } from './sandbox/workspace.js';
 import type { SecretBox } from './util/crypto.js';
 
@@ -25,7 +26,8 @@ export interface Runtime {
   bus: EventBus;
   gateway: ModelGateway;
   secrets: SecretBox | null;
-  exec: ExecSandboxes;
+  supabaseAuth: SupabaseAuthClient | null;
+  exec: ExecBackend;
   browsers: BrowserSandboxes | null;
   queue: JobQueue;
   sandbox: SandboxStatus;

@@ -86,7 +86,7 @@ export async function planMission(rt: Runtime, missionId: string, signal?: Abort
   }
   if (!available.length) return failMission(rt, ws, missionId, 'No specialist agents are configured. Assign models in Workforce.');
   const sandboxNotes = [
-    !rt.sandbox.docker || !rt.sandbox.execImage ? 'FORGE has no working sandbox computer right now; do not plan tasks that need run_command.' : '',
+    !rt.sandbox.execImage ? 'FORGE has no working sandbox computer right now; do not plan tasks that need run_command.' : '',
     !rt.browsers || !rt.sandbox.browserImage ? 'SCOUT has no working browser right now; plan research from existing knowledge only.' : '',
   ].filter(Boolean).join('\n');
 

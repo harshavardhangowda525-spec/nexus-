@@ -20,7 +20,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     workerConcurrency: num(env.NEXUS_WORKER_CONCURRENCY, 4),
     defaultMissionBudgetUsd: num(env.NEXUS_DEFAULT_BUDGET_USD, 5),
     queuePrefix: env.NEXUS_QUEUE_PREFIX || 'nexus',
+    supabase: {
+      url: env.SUPABASE_URL || '',
+      anonKey: env.SUPABASE_ANON_KEY || '',
+      serviceRoleKey: env.SUPABASE_SERVICE_ROLE_KEY || '',
+    },
     sandbox: {
+      provider: (env.SANDBOX_PROVIDER === 'e2b' ? 'e2b' : 'docker') as 'docker' | 'e2b',
+      e2bApiKey: env.E2B_API_KEY || '',
+      e2bTemplate: env.E2B_TEMPLATE || '',
       execImage: env.SANDBOX_EXEC_IMAGE || 'mirror.gcr.io/library/node:22-bookworm-slim',
       browserImage: env.SANDBOX_BROWSER_IMAGE || 'mcr.microsoft.com/playwright:v1.49.1-noble',
       memory: env.SANDBOX_MEMORY || '1g',

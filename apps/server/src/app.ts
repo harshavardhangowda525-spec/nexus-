@@ -5,6 +5,7 @@ import Fastify from 'fastify';
 import { Redis } from 'ioredis';
 import { registerRoutes } from './api/routes.js';
 import { registerWs } from './api/ws.js';
+import { SupabaseAuthClient } from './auth/supabase.js';
 import type { Config } from './config.js';
 import { migrate } from './db/migrate.js';
 import { createPool } from './db/pool.js';
@@ -15,6 +16,7 @@ import { schedule } from './orchestrator/missions.js';
 import type { Runtime, SandboxStatus } from './runtime.js';
 import { BrowserSandboxes, buildNssDb } from './sandbox/browser.js';
 import { dockerAvailable, ensureNetwork, ExecSandboxes, imageExists } from './sandbox/docker.js';
+import { E2BSandboxes, type ExecBackend } from './sandbox/e2b.js';
 import { EgressGateway } from './sandbox/egress.js';
 import { SecretBox } from './util/crypto.js';
 
@@ -30,16 +32,44 @@ export async function createRuntime(cfg: Config, opts: BootOptions = {}) {
   let secrets: SecretBox | null = null;
   try { secrets = cfg.masterKey ? new SecretBox(cfg.masterKey) : null; } catch (e) { console.warn(`[nexus] ${(e as Error).message}`); }
 
+  const supabaseAuth =
+    cfg.supabase.url && cfg.supabase.anonKey
+      ? new SupabaseAuthClient({
+          url: cfg.supabase.url,
+          anonKey: cfg.supabase.anonKey,
+          serviceRoleKey: cfg.supabase.serviceRoleKey || undefined,
+        })
+      : null;
+
   const sandbox: SandboxStatus = { docker: false, execImage: false, browserImage: false, egress: false, detail: null };
-  const exec = new ExecSandboxes({ image: cfg.sandbox.execImage, memory: cfg.sandbox.memory, cpus: cfg.sandbox.cpus, pids: cfg.sandbox.pids, uid: cfg.sandbox.uid, maxOutputBytes: cfg.sandbox.maxOutputBytes });
+  const useE2b = cfg.sandbox.provider === 'e2b' && !!cfg.sandbox.e2bApiKey;
+  const e2bExec = useE2b
+    ? new E2BSandboxes({ apiKey: cfg.sandbox.e2bApiKey, template: cfg.sandbox.e2bTemplate || undefined, maxOutputBytes: cfg.sandbox.maxOutputBytes })
+    : null;
+  const exec: ExecBackend =
+    e2bExec ??
+    new ExecSandboxes({
+      image: cfg.sandbox.execImage,
+      memory: cfg.sandbox.memory,
+      cpus: cfg.sandbox.cpus,
+      pids: cfg.sandbox.pids,
+      uid: cfg.sandbox.uid,
+      maxOutputBytes: cfg.sandbox.maxOutputBytes,
+    });
   let browsers: BrowserSandboxes | null = null;
   let egress: EgressGateway | null = null;
   const problems: string[] = [];
+  if (useE2b) {
+    sandbox.execImage = true;
+  }
   sandbox.docker = await dockerAvailable();
-  if (!sandbox.docker) problems.push('Docker is not reachable, so agents have no computers. Start Docker and restart the server.');
-  else {
-    sandbox.execImage = await imageExists(cfg.sandbox.execImage);
-    if (!sandbox.execImage) problems.push(`Sandbox image ${cfg.sandbox.execImage} is missing (run npm run sandbox:setup).`);
+  if (!sandbox.docker) {
+    if (!useE2b) problems.push('Docker is not reachable, so agents have no computers. Start Docker or configure E2B (SANDBOX_PROVIDER=e2b).');
+  } else {
+    if (!useE2b) {
+      sandbox.execImage = await imageExists(cfg.sandbox.execImage);
+      if (!sandbox.execImage) problems.push(`Sandbox image ${cfg.sandbox.execImage} is missing (run npm run sandbox:setup).`);
+    }
     sandbox.browserImage = await imageExists(cfg.sandbox.browserImage);
     if (!sandbox.browserImage) problems.push(`Browser image ${cfg.sandbox.browserImage} is missing (run npm run sandbox:setup).`);
     try {
@@ -63,11 +93,12 @@ export async function createRuntime(cfg: Config, opts: BootOptions = {}) {
   sandbox.detail = problems.join(' ') || null;
   if (problems.length) console.warn(`[nexus] sandbox: ${sandbox.detail}`);
 
-  const rt: Runtime = { cfg, db, redis, bus, gateway: new ModelGateway(opts.gateway), secrets, exec, browsers, queue, sandbox };
+  const rt: Runtime = { cfg, db, redis, bus, gateway: new ModelGateway(opts.gateway), secrets, supabaseAuth, exec, browsers, queue, sandbox };
   return {
     rt,
     async close() {
       browsers?.closeAll();
+      await e2bExec?.closeAll();
       await egress?.stop();
       await queue.close();
       redis.disconnect();

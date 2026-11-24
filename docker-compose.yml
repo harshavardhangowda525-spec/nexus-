@@ -1,6 +1,6 @@
 # NEXUS Docker Compose stack
 #
-# Database: By default, NEXUS connects to Neon Postgres via DATABASE_URL in .env.
+# Database: By default, NEXUS connects to Supabase Postgres via DATABASE_URL in .env.
 # For offline local development, start the optional local Postgres service with:
 #   docker compose --profile local-db up -d
 #

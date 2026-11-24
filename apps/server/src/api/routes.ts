@@ -3,7 +3,7 @@ import { AGENT_IDS, AGENT_PROFILES, type AgentConfigView, type AgentId, type Cre
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { loadAgentTarget } from '../agents/config.js';
-import { addMember, AuthError, bootstrap, COOKIE, destroySession, login, requireRole, resolveSession } from '../auth/auth.js';
+import { addMember, AuthError, bootstrap, COOKIE, createSession, destroySession, login, requireRole, resolveSession } from '../auth/auth.js';
 import { audit, rowToEvent } from '../events/bus.js';
 import { DEFAULT_MODELS } from '../models/gateway.js';
 import { decideApproval, toApprovalView } from '../orchestrator/approvals.js';
@@ -58,7 +58,15 @@ export async function registerRoutes(app: FastifyInstance, rt: Runtime) {
   app.get('/api/health', async () => {
     const db = await rt.db.query('select 1').then(() => true, () => false);
     const redis = await rt.redis.ping().then((r) => r === 'PONG', () => false);
-    return { ok: db && redis, db, redis, sandbox: rt.sandbox, worker: rt.cfg.runWorker };
+    return {
+      ok: db && redis,
+      db,
+      redis,
+      sandbox: rt.sandbox,
+      sandboxProvider: rt.cfg.sandbox.provider === 'e2b' && rt.cfg.sandbox.e2bApiKey ? 'e2b' : 'docker',
+      authProvider: rt.supabaseAuth ? 'supabase' : 'local',
+      worker: rt.cfg.runWorker,
+    };
   });
 
   app.get('/api/setup', authed, async (req): Promise<SetupStatus & { needsBootstrap: false }> => {
@@ -75,21 +83,38 @@ export async function registerRoutes(app: FastifyInstance, rt: Runtime) {
   /* ---------------- auth ---------------- */
   app.get('/api/auth/state', async (req) => {
     const n = (await rt.db.query('select count(*)::int as n from users')).rows[0].n;
-    return { needsBootstrap: n === 0, user: req.auth ? { email: req.auth.email, name: req.auth.name, role: req.auth.role, workspaceId: req.auth.workspaceId } : null };
+    return {
+      needsBootstrap: n === 0,
+      authProvider: rt.supabaseAuth ? 'supabase' : 'local',
+      user: req.auth ? { email: req.auth.email, name: req.auth.name, role: req.auth.role, workspaceId: req.auth.workspaceId } : null,
+    };
   });
 
   app.post('/api/auth/bootstrap', async (req, reply) => {
     const b = parse(z.object({ email: z.string(), name: z.string().min(1).max(80), password: z.string(), workspaceName: z.string().min(1).max(80) }), req.body);
+    if (rt.supabaseAuth) {
+      await rt.supabaseAuth.signUp(b.email, b.password, b.name);
+    }
     const r = await bootstrap(rt.db, b);
-    const s = await login(rt.db, b.email, b.password);
-    await audit(rt.db, { workspaceId: r.workspaceId, actorType: 'user', actorId: r.userId, action: 'workspace.bootstrap' });
+    const s = await createSession(rt.db, r.userId, r.workspaceId);
+    await audit(rt.db, { workspaceId: r.workspaceId, actorType: 'user', actorId: r.userId, action: 'workspace.bootstrap', detail: { authProvider: rt.supabaseAuth ? 'supabase' : 'local' } });
     reply.setCookie(COOKIE, s.token, { ...cookieOpts, maxAge: s.maxAge });
     return { ok: true };
   });
 
   app.post('/api/auth/login', async (req, reply) => {
     const b = parse(z.object({ email: z.string(), password: z.string() }), req.body);
-    const s = await login(rt.db, b.email, b.password);
+    let s: { token: string; maxAge: number };
+    if (rt.supabaseAuth) {
+      await rt.supabaseAuth.signIn(b.email, b.password);
+      const u = (await rt.db.query('select id from users where email = $1', [b.email.toLowerCase()])).rows[0];
+      if (!u) throw new AuthError('No NEXUS workspace membership found for this Supabase account', 403);
+      const m = (await rt.db.query('select workspace_id from memberships where user_id = $1 order by role desc limit 1', [u.id])).rows[0];
+      if (!m) throw new AuthError('You are not a member of any workspace', 403);
+      s = await createSession(rt.db, u.id, m.workspace_id);
+    } else {
+      s = await login(rt.db, b.email, b.password);
+    }
     reply.setCookie(COOKIE, s.token, { ...cookieOpts, maxAge: s.maxAge });
     return { ok: true };
   });
@@ -105,6 +130,9 @@ export async function registerRoutes(app: FastifyInstance, rt: Runtime) {
 
   app.post('/api/members', admin, async (req) => {
     const b = parse(z.object({ email: z.string(), name: z.string().min(1).max(80), password: z.string(), role: z.enum(['admin', 'operator', 'viewer']) }), req.body);
+    if (rt.supabaseAuth) {
+      await rt.supabaseAuth.signUp(b.email, b.password, b.name);
+    }
     const id = await addMember(rt.db, { ...b, workspaceId: req.auth!.workspaceId });
     await audit(rt.db, { workspaceId: req.auth!.workspaceId, actorType: 'user', actorId: req.auth!.userId, action: 'member.add', target: id, detail: { role: b.role } });
     return { id };
