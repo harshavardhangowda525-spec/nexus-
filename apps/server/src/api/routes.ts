@@ -183,6 +183,29 @@ export async function registerRoutes(app: FastifyInstance, rt: Runtime) {
     }
   });
 
+  app.get('/api/credentials/:id/models', authed, async (req) => {
+    const { id } = req.params as { id: string };
+    const c = (await rt.db.query('select * from provider_credentials where id = $1 and workspace_id = $2', [id, req.auth!.workspaceId])).rows[0];
+    if (!c) throw new MissionError('Credential not found', 404);
+    if (c.provider !== 'ollama' && c.provider !== 'openai') return { models: [DEFAULT_MODELS[c.provider as ProviderKind]] };
+    const base = (c.base_url || (c.provider === 'ollama' ? 'http://127.0.0.1:11434/v1' : 'https://api.openai.com/v1')).replace(/\/+$/, '');
+    const apiKey = c.secret_ciphertext ? rt.secrets?.open(c.secret_ciphertext) : undefined;
+    try {
+      const res = await fetch(`${base}/models`, {
+        headers: apiKey ? { authorization: `Bearer ${apiKey}` } : {},
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!res.ok) return { models: [] };
+      const data = (await res.json()) as any;
+      const models: string[] = (data.data || [])
+        .map((m: any) => String(m.id || ''))
+        .filter((m: string) => m && !/whisper|tts|guard|playai|orpheus/i.test(m));
+      return { models };
+    } catch {
+      return { models: [] };
+    }
+  });
+
   /* ---------------- agents ---------------- */
   app.get('/api/agents', authed, async (req): Promise<AgentConfigView[]> => {
     const ws = req.auth!.workspaceId;

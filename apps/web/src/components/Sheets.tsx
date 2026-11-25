@@ -46,6 +46,7 @@ export function WorkforceSheet({
   const [credMsg, setCredMsg] = useState<string | null>(null);
   const [credErr, setCredErr] = useState<string | null>(null);
   const [testModel, setTestModel] = useState<Record<string, string>>({});
+  const [credModels, setCredModels] = useState<Record<string, string[]>>({});
   const [testOut, setTestOut] = useState<Record<string, { ok: boolean; text: string }>>({});
   const [drafts, setDrafts] = useState<
     Record<AgentId, { credentialId: string; model: string; effort: string; maxSteps: number; enabled: boolean }>
@@ -64,6 +65,18 @@ export function WorkforceSheet({
     return d;
   });
   const [saving, setSaving] = useState<string | null>(null);
+
+  useEffect(() => {
+    for (const c of credentials) {
+      api.credentialModels(c.id)
+        .then((r) => {
+          if (!r.models.length) return;
+          setCredModels((p) => ({ ...p, [c.id]: r.models }));
+          setTestModel((p) => (p[c.id] ? p : { ...p, [c.id]: r.models[0] }));
+        })
+        .catch(() => {});
+    }
+  }, [credentials]);
 
   useEffect(() => {
     setDrafts((prev) => {
@@ -171,11 +184,17 @@ export function WorkforceSheet({
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                   <input
                     className="input"
-                    style={{ width: 150, padding: '5px 8px', fontSize: 12 }}
-                    placeholder={defaults[c.provider] || 'model'}
-                    value={testModel[c.id] ?? defaults[c.provider] ?? ''}
+                    list={`models-${c.id}`}
+                    style={{ width: 170, padding: '5px 8px', fontSize: 12 }}
+                    placeholder={credModels[c.id]?.[0] || defaults[c.provider] || 'model'}
+                    value={testModel[c.id] ?? credModels[c.id]?.[0] ?? defaults[c.provider] ?? ''}
                     onChange={(e) => setTestModel((p) => ({ ...p, [c.id]: e.target.value }))}
                   />
+                  <datalist id={`models-${c.id}`}>
+                    {(credModels[c.id] || []).map((m) => (
+                      <option key={m} value={m} />
+                    ))}
+                  </datalist>
                   <button type="button" className="btn sm" onClick={() => runTest(c)}>
                     Test
                   </button>
@@ -308,8 +327,9 @@ export function WorkforceSheet({
                   <label>Model</label>
                   <input
                     className="input"
+                    list={d.credentialId ? `models-${d.credentialId}` : undefined}
                     value={d.model}
-                    placeholder="claude-opus-5-5"
+                    placeholder={credModels[d.credentialId]?.[0] || 'model name'}
                     onChange={(e) => setDrafts((prev) => ({ ...prev, [a.id]: { ...prev[a.id], model: e.target.value } }))}
                   />
                 </div>

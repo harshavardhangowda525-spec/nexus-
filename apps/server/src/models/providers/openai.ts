@@ -82,9 +82,22 @@ export function openaiCompatibleAdapter(defaultBase: string, needsKey: boolean):
       }
       const text = await res.text();
       if (!res.ok) {
+        let extra = '';
+        if (res.status === 404 && !needsKey) {
+          try {
+            const mr = await fetch(`${base}/models`, { signal: AbortSignal.timeout(3000) });
+            if (mr.ok) {
+              const md = (await mr.json()) as any;
+              const avail = (md.data || []).map((x: any) => x.id).filter(Boolean);
+              extra = avail.length
+                ? ` Installed Ollama models: ${avail.join(', ')}. Pick one in Workforce or run: ollama pull ${target.model}`
+                : ` No Ollama models are installed yet. Run: ollama pull ${target.model}`;
+            }
+          } catch { /* ignore */ }
+        }
         const ra = Number(res.headers.get('retry-after'));
         const retryAfterMs = Number.isFinite(ra) && ra > 0 ? Math.min(ra * 1000, 30_000) : undefined;
-        throw new ModelError(`HTTP ${res.status}: ${text.slice(0, 400)}`, retryableStatus(res.status), res.status, retryAfterMs);
+        throw new ModelError(`HTTP ${res.status}: ${text.slice(0, 300)}${extra}`, retryableStatus(res.status), res.status, retryAfterMs);
       }
       let data: any;
       try { data = JSON.parse(text); } catch { throw new ModelError('Provider returned invalid JSON', true); }

@@ -171,6 +171,7 @@ export const api = {
       `/api/credentials/${id}/test`,
       { method: 'POST', body: JSON.stringify({ model }) },
     ),
+  credentialModels: (id: string) => req<{ models: string[] }>(`/api/credentials/${id}/models`),
 
   missions: () => req<MissionSummary[]>('/api/missions'),
   createMission: (b: { brief: string; budgetUsd?: number; projectId?: string | null }) =>
