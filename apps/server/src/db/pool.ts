@@ -8,7 +8,12 @@ export type Db = pg.Pool;
 export type Queryable = pg.Pool | pg.PoolClient;
 
 export function createPool(url: string): Db {
-  return new pg.Pool({ connectionString: url, max: 12 });
+  const needsSsl = /sslmode=require|supabase\.(co|com)/i.test(url);
+  return new pg.Pool({
+    connectionString: url,
+    max: 12,
+    ...(needsSsl ? { ssl: { rejectUnauthorized: false } } : {}),
+  });
 }
 
 export async function tx<T>(db: Db, fn: (c: pg.PoolClient) => Promise<T>): Promise<T> {

@@ -98,6 +98,7 @@ function eventToFeed(ev: NexusEvent): FeedItem | null {
 
 export function NexusApp() {
   const [auth, setAuth] = useState<AuthState | null>(null);
+  const [authLoadErr, setAuthLoadErr] = useState<string | null>(null);
   const [agents, setAgents] = useState<AgentConfigView[]>([]);
   const [credentials, setCredentials] = useState<CredentialView[]>([]);
   const [defaults, setDefaults] = useState<Record<ProviderKind, string>>({
@@ -161,11 +162,17 @@ export function NexusApp() {
   }, []);
 
   const loadAuth = useCallback(async () => {
+    setAuthLoadErr(null);
     try {
       const s = await api.authState();
       setAuth(s);
-    } catch {
-      setAuth({ needsBootstrap: false, user: null });
+    } catch (err) {
+      setAuthLoadErr(
+        err instanceof ApiError
+          ? `Cannot reach NEXUS backend API (${err.message}). Make sure the server is running on port 4000 and check its terminal log.`
+          : 'Cannot reach NEXUS backend API on port 4000. Check the [server] terminal log.',
+      );
+      setAuth(null);
     }
   }, []);
 
@@ -487,7 +494,16 @@ export function NexusApp() {
       <div className="auth-wrap">
         <div className="auth-card glass" style={{ textAlign: 'center' }}>
           <span className="word">NEXUS</span>
-          <p className="sub">Connecting to office…</p>
+          {authLoadErr ? (
+            <>
+              <div className="err-box" style={{ textAlign: 'left' }}>{authLoadErr}</div>
+              <button type="button" className="btn primary" onClick={() => void loadAuth()}>
+                Retry connection
+              </button>
+            </>
+          ) : (
+            <p className="sub">Connecting to office…</p>
+          )}
         </div>
       </div>
     );
