@@ -23,18 +23,51 @@ export function toOpenAIMessages(req: ChatRequest) {
   return out;
 }
 
+function compactForGroq(messages: any[], tools: any[], maxBudget = 7400): { messages: any[]; maxCompletion: number } {
+  const est = (m: any[]) => Math.ceil((JSON.stringify(m).length + JSON.stringify(tools).length) / 3.5);
+  let msgs = messages.map((m) => ({ ...m }));
+  if (est(msgs) > 5400) {
+    // Trim older tool outputs first, preserving the latest 2 messages in full.
+    msgs = msgs.map((m, i) => {
+      if (i >= msgs.length - 2 || typeof m.content !== 'string') return m;
+      if (m.role === 'tool' && m.content.length > 600) {
+        return { ...m, content: m.content.slice(0, 600) + '\n[earlier tool output compacted for TPM budget]' };
+      }
+      if (m.role === 'user' && m.content.length > 1500) {
+        return { ...m, content: m.content.slice(0, 1500) + '\n[compacted]' };
+      }
+      return m;
+    });
+  }
+  // If still over budget, drop oldest middle turns (keeping system + initial user prompt + last 4 turns).
+  while (msgs.length > 6 && est(msgs) > 5800) {
+    msgs.splice(2, 2);
+  }
+  const used = est(msgs);
+  const maxCompletion = Math.max(400, Math.min(2048, maxBudget - used));
+  return { messages: msgs, maxCompletion };
+}
+
 export function openaiCompatibleAdapter(defaultBase: string, needsKey: boolean): ProviderAdapter {
   return {
     async chat(target: ModelTarget, req: ChatRequest, signal?: AbortSignal): Promise<ChatResponse> {
       if (needsKey && !target.apiKey) throw new ModelError('No API key configured for this provider', false);
       const base = (target.baseUrl || defaultBase).replace(/\/+$/, '');
       const isGroq = /api\.groq\.com/i.test(base);
-      const defaultMax = isGroq ? (/qwen/i.test(target.model) ? 800 : 2048) : 16000;
+      const tools = req.tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.input_schema } }));
+      let messages = toOpenAIMessages(req);
+      let maxTokens = req.maxTokens ?? 16000;
+      if (isGroq) {
+        const compacted = compactForGroq(messages, tools, /qwen/i.test(target.model) ? 6500 : 7400);
+        messages = compacted.messages;
+        const groqCap = /qwen/i.test(target.model) ? Math.min(compacted.maxCompletion, 800) : compacted.maxCompletion;
+        maxTokens = req.maxTokens ? Math.min(req.maxTokens, groqCap) : groqCap;
+      }
       const body = {
         model: target.model,
-        messages: toOpenAIMessages(req),
-        tools: req.tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.input_schema } })),
-        max_completion_tokens: req.maxTokens ? Math.min(req.maxTokens, isGroq ? defaultMax : req.maxTokens) : defaultMax,
+        messages,
+        tools,
+        max_completion_tokens: maxTokens,
       };
       let res: Response;
       try {
