@@ -45,7 +45,23 @@ export type Plan = z.infer<typeof PlanSchema>;
 
 /** Validates a plan proposed by the model: schema, unique keys, known deps, available agents, no cycles. */
 export function validatePlan(input: unknown, available: AgentId[]): { ok: true; plan: Plan } | { ok: false; error: string } {
-  const p = PlanSchema.safeParse(input);
+  const normalized =
+    input && typeof input === 'object' && Array.isArray((input as any).tasks)
+      ? {
+          ...(input as Record<string, unknown>),
+          tasks: (input as any).tasks.map((t: any) =>
+            t && typeof t === 'object'
+              ? {
+                  ...t,
+                  agent: typeof t.agent === 'string' ? t.agent.toLowerCase() : t.agent,
+                  deps: Array.isArray(t.deps) ? t.deps : [],
+                  title: typeof t.title === 'string' ? t.title.slice(0, 80) : t.title,
+                }
+              : t,
+          ),
+        }
+      : input;
+  const p = PlanSchema.safeParse(normalized);
   if (!p.success) return { ok: false, error: p.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ') };
   const plan = p.data;
   const keys = new Set<string>();

@@ -801,7 +801,11 @@ export function NexusApp() {
               />
             </label>
           </div>
-          {launchErr && <span className="err-text" style={{ fontSize: 12 }}>{launchErr}</span>}
+          {(launchErr || (mission?.status === 'failed' && mission.error)) && (
+            <span className="err-text" style={{ fontSize: 12 }}>
+              {launchErr || mission?.error}
+            </span>
+          )}
         </div>
 
         <div className="graph">

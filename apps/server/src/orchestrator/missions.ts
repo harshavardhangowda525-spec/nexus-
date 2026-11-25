@@ -195,13 +195,16 @@ async function completeMission(rt: Runtime, ws: string, missionId: string) {
 }
 
 export async function failMission(rt: Runtime, ws: string, missionId: string, error: string) {
+  console.error(`[nexus] mission ${missionId} failed: ${error}`);
   await setMissionStatus(rt, ws, missionId, 'failed', { error });
+  await rt.bus.emit({ workspaceId: ws, missionId, agentId: 'atlas', type: 'error', payload: { message: error } });
   await setAgentState(rt, { workspaceId: ws, missionId, agentId: 'atlas', state: 'error', label: 'Mission failed', detail: error });
   await releaseSandboxes(rt, missionId, false);
 }
 
 /** Called by the worker when a task fails for good. The mission stops; the CEO can retry the task. */
 export async function failTask(rt: Runtime, taskId: string, error: string) {
+  console.error(`[nexus] task ${taskId} failed: ${error}`);
   const t = (await rt.db.query('update tasks set status = $2, error = $3, finished_at = now() where id = $1 returning *', [taskId, 'failed', error])).rows[0];
   if (!t) return;
   const m = (await rt.db.query('select workspace_id from missions where id = $1', [t.mission_id])).rows[0];
