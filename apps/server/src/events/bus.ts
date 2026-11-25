@@ -1,6 +1,6 @@
 import type { AgentId, EventType, NexusEvent } from '@nexus/shared';
-import type { Redis } from 'ioredis';
 import type { Db } from '../db/pool.js';
+import type { StateStore } from './memory.js';
 
 export const EVENTS_CHANNEL = 'nexus:events';
 
@@ -15,11 +15,12 @@ export interface EmitInput {
 
 /**
  * Every state change goes through here: persisted to `events` (the source of truth
- * for replay and progress) and published on Redis so API processes can push it to
- * browsers. Ephemeral events (browser frames) are published but not stored.
+ * for replay and progress) and published on Redis (or in-memory in single-process dev)
+ * so API processes can push it to browsers. Ephemeral events (browser frames) are
+ * published but not stored.
  */
 export class EventBus {
-  constructor(private db: Db, private pub: Redis) {}
+  constructor(private db: Db, private pub: Pick<StateStore, 'publish'>) {}
 
   async emit(e: EmitInput, opts: { persist?: boolean } = {}): Promise<NexusEvent> {
     const persist = opts.persist ?? true;

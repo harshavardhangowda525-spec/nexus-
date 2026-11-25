@@ -9,13 +9,21 @@ import type { Runtime } from '../runtime.js';
 /** Pushes every event of the viewer's workspace to their browser in real time. */
 export async function registerWs(app: FastifyInstance, rt: Runtime) {
   const clients = new Map<WebSocket, string>();
-  const sub = new Redis(rt.cfg.redisUrl);
-  await sub.subscribe(EVENTS_CHANNEL);
-  sub.on('message', (_ch, raw) => {
+  const dispatch = (raw: string) => {
     let ws = '';
     try { ws = (JSON.parse(raw) as NexusEvent).workspaceId; } catch { return; }
     for (const [sock, wid] of clients) if (wid === ws && sock.readyState === sock.OPEN) sock.send(raw);
-  });
+  };
+
+  let stopSub: () => void;
+  if (rt.memoryMode) {
+    stopSub = rt.redis.subscribe(EVENTS_CHANNEL, dispatch);
+  } else {
+    const sub = new Redis(rt.cfg.redisUrl);
+    await sub.subscribe(EVENTS_CHANNEL);
+    sub.on('message', (_ch, raw) => dispatch(raw));
+    stopSub = () => sub.disconnect();
+  }
 
   app.get('/api/ws', { websocket: true }, async (socket, req) => {
     const origin = req.headers.origin;
@@ -28,5 +36,5 @@ export async function registerWs(app: FastifyInstance, rt: Runtime) {
     socket.on('close', () => { clients.delete(socket); clearInterval(ping); });
   });
 
-  app.addHook('onClose', async () => { sub.disconnect(); for (const s of clients.keys()) s.close(); });
+  app.addHook('onClose', async () => { stopSub(); for (const s of clients.keys()) s.close(); });
 }

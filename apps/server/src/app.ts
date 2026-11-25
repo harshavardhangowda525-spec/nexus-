@@ -10,6 +10,7 @@ import type { Config } from './config.js';
 import { migrate } from './db/migrate.js';
 import { createPool } from './db/pool.js';
 import { audit, EventBus } from './events/bus.js';
+import { createMemoryQueue, MemoryStore, probeTcp, type StateStore } from './events/memory.js';
 import { ModelGateway, type GatewayOptions } from './models/gateway.js';
 import { createQueue, startWorker } from './orchestrator/queue.js';
 import { schedule } from './orchestrator/missions.js';
@@ -22,13 +23,46 @@ import { SecretBox } from './util/crypto.js';
 
 export interface BootOptions { gateway?: GatewayOptions; logger?: boolean; withWorker?: boolean; withHttp?: boolean }
 
-/** Creates the runtime: DB, Redis, queue, model gateway and sandbox managers (with health checks). */
+function wrapRedis(r: Redis): StateStore {
+  return {
+    publish: (ch, msg) => r.publish(ch, msg),
+    subscribe: () => () => {},
+    hset: (k, f, v) => r.hset(k, f, v),
+    hgetall: (k) => r.hgetall(k),
+    get: (k) => r.get(k),
+    set: (k, v, mode, ttl) => (mode === 'EX' && ttl ? r.set(k, v, 'EX', ttl) : r.set(k, v)),
+    ping: () => r.ping(),
+    disconnect: () => r.disconnect(),
+  };
+}
+
+async function shouldUseMemoryRedis(redisUrl: string): Promise<boolean> {
+  if (!redisUrl || redisUrl === 'memory') return true;
+  try {
+    const u = new URL(redisUrl);
+    if (u.hostname === '127.0.0.1' || u.hostname === 'localhost') {
+      const ok = await probeTcp(u.hostname, Number(u.port || 6379));
+      if (!ok) {
+        console.warn(`[nexus] Redis not reachable at ${u.hostname}:${u.port || 6379}; using single-process in-memory queue and event bus.`);
+        return true;
+      }
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+/** Creates the runtime: DB, Redis (or in-memory fallback), queue, model gateway and sandbox managers (with health checks). */
 export async function createRuntime(cfg: Config, opts: BootOptions = {}) {
   const db = createPool(cfg.databaseUrl);
   await migrate(db);
-  const redis = new Redis(cfg.redisUrl, { maxRetriesPerRequest: 3 });
+
+  const memoryMode = await shouldUseMemoryRedis(cfg.redisUrl);
+  const redis: StateStore = memoryMode ? new MemoryStore() : wrapRedis(new Redis(cfg.redisUrl, { maxRetriesPerRequest: 3 }));
   const bus = new EventBus(db, redis);
-  const queue = createQueue(cfg.redisUrl, cfg.queuePrefix);
+  const memQueue = memoryMode ? createMemoryQueue() : null;
+  const queue = memQueue ?? createQueue(cfg.redisUrl, cfg.queuePrefix);
   let secrets: SecretBox | null = null;
   try { secrets = cfg.masterKey ? new SecretBox(cfg.masterKey) : null; } catch (e) { console.warn(`[nexus] ${(e as Error).message}`); }
 
@@ -42,7 +76,8 @@ export async function createRuntime(cfg: Config, opts: BootOptions = {}) {
       : null;
 
   const sandbox: SandboxStatus = { docker: false, execImage: false, browserImage: false, egress: false, detail: null };
-  const useE2b = cfg.sandbox.provider === 'e2b' && !!cfg.sandbox.e2bApiKey;
+  sandbox.docker = await dockerAvailable();
+  const useE2b = !!cfg.sandbox.e2bApiKey && (cfg.sandbox.provider === 'e2b' || !sandbox.docker);
   const e2bExec = useE2b
     ? new E2BSandboxes({ apiKey: cfg.sandbox.e2bApiKey, template: cfg.sandbox.e2bTemplate || undefined, maxOutputBytes: cfg.sandbox.maxOutputBytes })
     : null;
@@ -61,10 +96,10 @@ export async function createRuntime(cfg: Config, opts: BootOptions = {}) {
   const problems: string[] = [];
   if (useE2b) {
     sandbox.execImage = true;
+    console.log('[nexus] Using E2B cloud sandboxes for agent execution.');
   }
-  sandbox.docker = await dockerAvailable();
   if (!sandbox.docker) {
-    if (!useE2b) problems.push('Docker is not reachable, so agents have no computers. Start Docker or configure E2B (SANDBOX_PROVIDER=e2b).');
+    if (!useE2b) problems.push('Docker is not reachable, so agents have no computers. Start Docker or set E2B_API_KEY.');
   } else {
     if (!useE2b) {
       sandbox.execImage = await imageExists(cfg.sandbox.execImage);
@@ -93,9 +128,10 @@ export async function createRuntime(cfg: Config, opts: BootOptions = {}) {
   sandbox.detail = problems.join(' ') || null;
   if (problems.length) console.warn(`[nexus] sandbox: ${sandbox.detail}`);
 
-  const rt: Runtime = { cfg, db, redis, bus, gateway: new ModelGateway(opts.gateway), secrets, supabaseAuth, exec, browsers, queue, sandbox };
+  const rt: Runtime = { cfg, db, redis, memoryMode, bus, gateway: new ModelGateway(opts.gateway), secrets, supabaseAuth, exec, browsers, queue, sandbox };
   return {
     rt,
+    memQueue,
     async close() {
       browsers?.closeAll();
       await e2bExec?.closeAll();
@@ -120,15 +156,15 @@ export async function recover(rt: Runtime) {
 }
 
 export async function buildServer(cfg: Config, opts: BootOptions = {}) {
-  const { rt, close } = await createRuntime(cfg, opts);
+  const { rt, memQueue, close } = await createRuntime(cfg, opts);
   const app = Fastify({ logger: opts.logger ?? true, bodyLimit: 1_000_000, trustProxy: true });
   await app.register(cookie);
   await app.register(websocket, { options: { maxPayload: 64 * 1024 } });
   await registerRoutes(app, rt);
   await registerWs(app, rt);
-  let worker: Awaited<ReturnType<typeof startWorker>> | null = null;
+  let worker: { close(): Promise<void> } | null = null;
   if (opts.withWorker ?? cfg.runWorker) {
-    worker = startWorker(rt, cfg.redisUrl, cfg.queuePrefix, cfg.workerConcurrency);
+    worker = memQueue ? memQueue.start(rt) : startWorker(rt, cfg.redisUrl, cfg.queuePrefix, cfg.workerConcurrency);
     await recover(rt);
   }
   app.addHook('onClose', async () => { await worker?.close(); await close(); });

@@ -1,10 +1,10 @@
 import path from 'node:path';
 import type { AgentId, AgentVisualState } from '@nexus/shared';
-import type { Redis } from 'ioredis';
 import type { SupabaseAuthClient } from './auth/supabase.js';
 import type { Config } from './config.js';
 import type { Db } from './db/pool.js';
 import type { EventBus } from './events/bus.js';
+import type { StateStore } from './events/memory.js';
 import type { ModelGateway } from './models/gateway.js';
 import type { BrowserSandboxes } from './sandbox/browser.js';
 import type { ExecBackend } from './sandbox/e2b.js';
@@ -22,7 +22,8 @@ export interface JobQueue {
 export interface Runtime {
   cfg: Config;
   db: Db;
-  redis: Redis;
+  redis: StateStore;
+  memoryMode: boolean;
   bus: EventBus;
   gateway: ModelGateway;
   secrets: SecretBox | null;
