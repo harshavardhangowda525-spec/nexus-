@@ -28,11 +28,13 @@ export function openaiCompatibleAdapter(defaultBase: string, needsKey: boolean):
     async chat(target: ModelTarget, req: ChatRequest, signal?: AbortSignal): Promise<ChatResponse> {
       if (needsKey && !target.apiKey) throw new ModelError('No API key configured for this provider', false);
       const base = (target.baseUrl || defaultBase).replace(/\/+$/, '');
+      const isGroq = /api\.groq\.com/i.test(base);
+      const defaultMax = isGroq ? (/qwen/i.test(target.model) ? 800 : 2048) : 16000;
       const body = {
         model: target.model,
         messages: toOpenAIMessages(req),
         tools: req.tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.input_schema } })),
-        max_completion_tokens: req.maxTokens ?? 16000,
+        max_completion_tokens: req.maxTokens ? Math.min(req.maxTokens, isGroq ? defaultMax : req.maxTokens) : defaultMax,
       };
       let res: Response;
       try {
@@ -46,7 +48,11 @@ export function openaiCompatibleAdapter(defaultBase: string, needsKey: boolean):
         throw new ModelError(`Request to ${base} failed: ${(e as Error).message}`, true);
       }
       const text = await res.text();
-      if (!res.ok) throw new ModelError(`HTTP ${res.status}: ${text.slice(0, 400)}`, retryableStatus(res.status), res.status);
+      if (!res.ok) {
+        const ra = Number(res.headers.get('retry-after'));
+        const retryAfterMs = Number.isFinite(ra) && ra > 0 ? Math.min(ra * 1000, 30_000) : undefined;
+        throw new ModelError(`HTTP ${res.status}: ${text.slice(0, 400)}`, retryableStatus(res.status), res.status, retryAfterMs);
+      }
       let data: any;
       try { data = JSON.parse(text); } catch { throw new ModelError('Provider returned invalid JSON', true); }
       const choice = data.choices?.[0];

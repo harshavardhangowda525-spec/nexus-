@@ -75,8 +75,10 @@ export class ModelGateway {
       } catch (e) {
         if (signal?.aborted) throw e;
         const err = e instanceof ModelError ? e : new ModelError((e as Error).message, true);
-        if (!err.retryable || attempt > maxRetries) throw err;
-        const delay = base * 2 ** (attempt - 1) * (0.75 + Math.random() * 0.5);
+        const limit = err.status === 429 ? Math.max(maxRetries, 5) : maxRetries;
+        if (!err.retryable || attempt > limit) throw err;
+        const expDelay = base * 2 ** (attempt - 1) * (0.75 + Math.random() * 0.5);
+        const delay = err.retryAfterMs ? Math.max(err.retryAfterMs, expDelay) : expDelay;
         await new Promise((r) => setTimeout(r, delay));
       }
     }

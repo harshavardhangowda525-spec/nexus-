@@ -54,7 +54,12 @@ export interface ProviderAdapter {
 
 /** Thrown by adapters. `retryable` drives the gateway's backoff policy. */
 export class ModelError extends Error {
-  constructor(message: string, public readonly retryable: boolean, public readonly status?: number) {
+  constructor(
+    message: string,
+    public readonly retryable: boolean,
+    public readonly status?: number,
+    public readonly retryAfterMs?: number,
+  ) {
     super(message);
     this.name = 'ModelError';
   }
