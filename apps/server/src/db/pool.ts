@@ -9,8 +9,18 @@ export type Queryable = pg.Pool | pg.PoolClient;
 
 export function createPool(url: string): Db {
   const needsSsl = /sslmode=require|supabase\.(co|com)/i.test(url);
+  let connectionString = url;
+  if (needsSsl) {
+    try {
+      const u = new URL(url);
+      u.searchParams.delete('sslmode');
+      connectionString = u.toString();
+    } catch {
+      /* let pg report invalid URL */
+    }
+  }
   return new pg.Pool({
-    connectionString: url,
+    connectionString,
     max: 12,
     ...(needsSsl ? { ssl: { rejectUnauthorized: false } } : {}),
   });
